@@ -1,35 +1,19 @@
 // =============================================================================
 // SESLI ASISTAN HOOK
-// Anestezi onam uygulaması için sesli yönlendirme + sesle cevap alma
-//
-// Akış:
-//   karsilama → sigaraSoru → (evet ise: sigaraYil → sigaraPaket) →
-//   alkolSoru → ozet → tamam
-//
-// Bu hook bağımsız olarak ses tanıma + TTS yönetir, UI sadece state'i okur
-// ve gerekli aksiyonları tetikler.
+// expo-speech-recognition + expo-speech ile tam çalışır implementasyon
 // =============================================================================
 
-import Voice, {
-    SpeechErrorEvent,
-    SpeechResultsEvent,
-} from '@react-native-voice/voice';
 import * as Speech from 'expo-speech';
+import {
+  ExpoSpeechRecognitionModule,
+  type ExpoSpeechRecognitionResultEvent,
+} from 'expo-speech-recognition';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PermissionsAndroid, Platform } from 'react-native';
-
-// ==================== TIP TANIMLARI ====================
 
 export type AsistanAdim =
-  | 'kapali'        // Asistan henüz başlamadı
-  | 'karsilama'     // "Butona basın" diyor
-  | 'aktifBekle'    // Buton basıldı, başlayacak
-  | 'sigaraSoru'    // Sigara kullanıyor mu sorusu
-  | 'sigaraYil'     // Kaç yıldır
-  | 'sigaraPaket'   // Günde kaç paket
-  | 'alkolSoru'     // Alkol kullanıyor mu
-  | 'ozet'          // Bilgileri okuyor
-  | 'tamam';        // Bitti, devam butonu yanıyor
+  | 'kapali' | 'karsilama' | 'aktifBekle'
+  | 'sigaraSoru' | 'sigaraYil' | 'sigaraPaket'
+  | 'alkolSoru' | 'ozet' | 'tamam';
 
 export type SesliAsistanCevaplar = {
   sigaraKullanimi: 'evet' | 'hayir' | '';
@@ -45,77 +29,50 @@ const BAŞLANGIÇ_CEVAPLAR: SesliAsistanCevaplar = {
   alkol: '',
 };
 
-// ==================== METİN PARSERLAR ====================
-
-/**
- * Konuşulan metinde "evet" veya "hayır" arar.
- * Hasta sadece bu iki kelimeden birini söylemesi için yönlendirildiği için
- * basit kelime kontrolü yeterlidir.
- */
-function parseEvetHayir(text: string): 'evet' | 'hayir' | null {
-  const lower = text.toLowerCase().trim();
-  if (lower.includes('evet')) return 'evet';
-  if (lower.includes('hayır') || lower.includes('hayir')) return 'hayir';
-  return null;
-}
-
-/**
- * Konuşulan metinde sayı arar. Hem dijital ("10") hem yazılı ("on") destekler.
- */
-function parseSayi(text: string): string | null {
-  const lower = text.toLowerCase().trim();
-
-  // Önce dijital sayı ara (örn: "10 yıldır" → "10")
-  const dijitalMatch = lower.match(/\d+/);
-  if (dijitalMatch) return dijitalMatch[0];
-
-  // Yazılı sayılar (1-30 arası yeterli, daha fazlası gerekirse genişletilir)
-  const yaziliSayilar: Record<string, string> = {
-    'sıfır': '0', 'sifir': '0',
-    'bir': '1',
-    'iki': '2',
-    'üç': '3', 'uc': '3',
-    'dört': '4', 'dort': '4',
-    'beş': '5', 'bes': '5',
-    'altı': '6', 'alti': '6',
-    'yedi': '7',
-    'sekiz': '8',
-    'dokuz': '9',
-    'on': '10',
-    'on bir': '11',
-    'on iki': '12',
-    'on üç': '13', 'on uc': '13',
-    'on dört': '14', 'on dort': '14',
-    'on beş': '15', 'on bes': '15',
-    'on altı': '16', 'on alti': '16',
-    'on yedi': '17',
-    'on sekiz': '18',
-    'on dokuz': '19',
-    'yirmi': '20',
-    'yirmi beş': '25', 'yirmi bes': '25',
-    'otuz': '30',
-    'kırk': '40', 'kirk': '40',
-    'elli': '50',
-  };
-
-  // Önce iki kelimeli olanları kontrol et (örn: "on beş")
-  for (const [key, val] of Object.entries(yaziliSayilar)) {
-    if (key.includes(' ') && lower.includes(key)) return val;
-  }
-  // Sonra tek kelimeli
-  for (const [key, val] of Object.entries(yaziliSayilar)) {
-    if (!key.includes(' ') && lower.split(/\s+/).includes(key)) return val;
-  }
-
-  return null;
-}
-
-// ==================== ANA HOOK ====================
-
 type Options = {
-  /** Sesli asistan tamamlandığında çağrılır */
   onTamamlandi?: (cevaplar: SesliAsistanCevaplar) => void;
 };
+
+// -----------------------------------------------------------------------------
+// Yardımcılar
+// -----------------------------------------------------------------------------
+
+function evetMiHayirMi(metin: string): 'evet' | 'hayir' | null {
+  const m = metin.toLowerCase().trim();
+  if (/\b(evet|tabi|tabii|elbette|olur|var|kullanıyorum|kullaniyorum|kullanırım|ediyorum|içiyorum|iciyorum)\b/.test(m)) {
+    return 'evet';
+  }
+  if (/\b(hayır|hayir|yok|kullanmıyorum|kullanmiyorum|içmiyorum|icmiyorum|asla|hiç|hic)\b/.test(m)) {
+    return 'hayir';
+  }
+  return null;
+}
+
+function sayiCikar(metin: string): string | null {
+  const m = metin.toLowerCase().trim();
+  const rakam = m.match(/\d+/);
+  if (rakam) return rakam[0];
+
+  const sayilar: Record<string, number> = {
+    'sıfır': 0, 'sifir': 0,
+    'bir': 1, 'iki': 2, 'üç': 3, 'uc': 3, 'uç': 3,
+    'dört': 4, 'dort': 4, 'beş': 5, 'bes': 5, 'altı': 6, 'alti': 6,
+    'yedi': 7, 'sekiz': 8, 'dokuz': 9, 'on': 10,
+    'onbir': 11, 'oniki': 12, 'onüç': 13, 'onuc': 13,
+    'ondört': 14, 'ondort': 14, 'onbeş': 15, 'onbes': 15,
+    'yirmi': 20, 'otuz': 30, 'kırk': 40, 'kirk': 40,
+    'elli': 50, 'altmış': 60, 'altmis': 60, 'yetmiş': 70, 'yetmis': 70,
+    'seksen': 80, 'doksan': 90, 'yüz': 100, 'yuz': 100,
+  };
+  for (const [kelime, deger] of Object.entries(sayilar)) {
+    if (m.includes(kelime)) return String(deger);
+  }
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Hook
+// -----------------------------------------------------------------------------
 
 export function useSesliAsistan(options: Options = {}) {
   const [adim, setAdim] = useState<AsistanAdim>('kapali');
@@ -124,267 +81,271 @@ export function useSesliAsistan(options: Options = {}) {
   const [sonAlinanMetin, setSonAlinanMetin] = useState('');
   const [hataMesaji, setHataMesaji] = useState<string | null>(null);
 
-  // Mevcut adımı ref'te tut, çünkü Voice callback'leri stale closure problemi yaratır
   const adimRef = useRef<AsistanAdim>('kapali');
   const cevaplarRef = useRef<SesliAsistanCevaplar>(BAŞLANGIÇ_CEVAPLAR);
+  const dinlemeyiKesIstendi = useRef(false);
+  const tekrarSayisiRef = useRef(0);
+
+  useEffect(() => { adimRef.current = adim; }, [adim]);
+  useEffect(() => { cevaplarRef.current = cevaplar; }, [cevaplar]);
+
+  const konus = useCallback((metin: string, sonraCagir?: () => void): void => {
+    Speech.stop();
+    setTimeout(() => {
+      Speech.speak(metin, {
+        language: 'tr-TR',
+        rate: 0.95,
+        pitch: 1.0,
+        onDone: () => { if (sonraCagir) setTimeout(sonraCagir, 300); },
+        onError: () => { if (sonraCagir) setTimeout(sonraCagir, 300); },
+      });
+    }, 100);
+  }, []);
+
+  const dinlemeyiBaslat = useCallback(async () => {
+    try {
+      dinlemeyiKesIstendi.current = false;
+      const izin = await ExpoSpeechRecognitionModule.getPermissionsAsync();
+      if (!izin.granted) {
+        const yeniIzin = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+        if (!yeniIzin.granted) {
+          setHataMesaji('Mikrofon izni gerekli');
+          return;
+        }
+      }
+      ExpoSpeechRecognitionModule.start({
+        lang: 'tr-TR',
+        interimResults: true,
+        continuous: false,
+        requiresOnDeviceRecognition: false,
+        addsPunctuation: false,
+        contextualStrings: [
+          'evet', 'hayır', 'bir', 'iki', 'üç', 'dört', 'beş',
+          'altı', 'yedi', 'sekiz', 'dokuz', 'on', 'onbir', 'oniki',
+          'yirmi', 'otuz',
+        ],
+      });
+    } catch (e: any) {
+      console.error('[useSesliAsistan] dinlemeyiBaslat hatası:', e);
+      setHataMesaji('Mikrofon başlatılamadı: ' + (e?.message ?? 'bilinmiyor'));
+    }
+  }, []);
+
+  const dinlemeyiKes = useCallback(() => {
+    dinlemeyiKesIstendi.current = true;
+    try { ExpoSpeechRecognitionModule.stop(); } catch {}
+    setDinleniyor(false);
+  }, []);
 
   useEffect(() => {
-    adimRef.current = adim;
-  }, [adim]);
+    const startSub = ExpoSpeechRecognitionModule.addListener('start', () => {
+      setDinleniyor(true);
+      setHataMesaji(null);
+    });
 
-  useEffect(() => {
-    cevaplarRef.current = cevaplar;
-  }, [cevaplar]);
+    const endSub = ExpoSpeechRecognitionModule.addListener('end', () => {
+      setDinleniyor(false);
+    });
 
-  // ==================== Mikrofon Olayları ====================
+    const errorSub = ExpoSpeechRecognitionModule.addListener('error', (event: any) => {
+      console.warn('[useSesliAsistan] STT error:', event);
+      setDinleniyor(false);
+      if (event.error === 'no-speech' || event.error === 'speech-timeout') {
+        if (adimRef.current !== 'kapali' && adimRef.current !== 'tamam' && adimRef.current !== 'ozet') {
+          setTimeout(() => {
+            if (!dinlemeyiKesIstendi.current) {
+              konus('Sizi duyamadım, tekrar söyler misiniz?', () => dinlemeyiBaslat());
+            }
+          }, 500);
+        }
+      } else {
+        setHataMesaji('Ses tanıma hatası: ' + (event.message ?? event.error));
+      }
+    });
 
-  useEffect(() => {
-    Voice.onSpeechResults = onSesAlindi;
-    Voice.onSpeechError = onSesHatasi;
-    Voice.onSpeechEnd = () => setDinleniyor(false);
+    const resultSub = ExpoSpeechRecognitionModule.addListener('result', (event: ExpoSpeechRecognitionResultEvent) => {
+      const sonuc = event.results[0]?.transcript ?? '';
+      setSonAlinanMetin(sonuc);
+      if (!event.isFinal) return;
+      const su_anki_adim = adimRef.current;
+      console.log(`[useSesliAsistan] Final: "${sonuc}" adim=${su_anki_adim}`);
+      islemeCevap(sonuc, su_anki_adim);
+    });
 
     return () => {
-      Voice.destroy().then(Voice.removeAllListeners);
-      Speech.stop();
+      startSub.remove();
+      endSub.remove();
+      errorSub.remove();
+      resultSub.remove();
     };
   }, []);
 
-  // Mikrofon izni iste
-  const izinIste = async (): Promise<boolean> => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Mikrofon İzni',
-            message: 'Sesli asistan için mikrofon izni gerekiyor.',
-            buttonPositive: 'İzin Ver',
-            buttonNegative: 'İptal',
-          }
-        );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  // ==================== SES KONTROL ====================
-
-  const konus = (metin: string, onBitti?: () => void) => {
-    Speech.stop();
-    Speech.speak(metin, {
-      language: 'tr-TR',
-      rate: 0.9,
-      onDone: () => {
-        if (onBitti) onBitti();
-      },
-      onStopped: () => {
-        // Manuel durdurmada onBitti çağrılmaz
-      },
-      onError: () => {
-        if (onBitti) onBitti();
-      },
-    });
-  };
-
-  const dinlemeyiBaslat = async () => {
-    try {
-      setSonAlinanMetin('');
-      setHataMesaji(null);
-      await Voice.start('tr-TR');
-      setDinleniyor(true);
-    } catch (e) {
-      setHataMesaji('Mikrofon başlatılamadı.');
-      setDinleniyor(false);
-    }
-  };
-
-  const dinlemeyiBitir = async () => {
-    try {
-      await Voice.stop();
-      setDinleniyor(false);
-    } catch {}
-  };
-
-  // ==================== CEVAP İŞLEME ====================
-
-  const onSesAlindi = (e: SpeechResultsEvent) => {
-    const sonuc = e.value?.[0] ?? '';
-    setSonAlinanMetin(sonuc);
-    if (!sonuc) return;
-
-    const mevcutAdim = adimRef.current;
-    const mevcutCevaplar = cevaplarRef.current;
-
-    // Adıma göre cevabı işle
-    if (mevcutAdim === 'sigaraSoru') {
-      const cevap = parseEvetHayir(sonuc);
-      if (cevap) {
-        const yeniCevaplar = { ...mevcutCevaplar, sigaraKullanimi: cevap };
-        setCevaplar(yeniCevaplar);
-        if (cevap === 'evet') {
-          gecisYap('sigaraYil', yeniCevaplar);
-        } else {
-          gecisYap('alkolSoru', yeniCevaplar);
+  const islemeCevap = useCallback((metin: string, su_anki_adim: AsistanAdim) => {
+    if (su_anki_adim === 'sigaraSoru') {
+      const cevap = evetMiHayirMi(metin);
+      if (cevap === null) {
+        tekrarSayisiRef.current++;
+        if (tekrarSayisiRef.current >= 3) {
+          setHataMesaji('Cevap anlaşılamadı. Lütfen formu manuel doldurun.');
+          setAdim('tamam');
+          tekrarSayisiRef.current = 0;
+          return;
         }
-      } else {
-        anlasilmadi('sigaraSoru');
+        konus('Lütfen evet veya hayır olarak cevaplayın.', () => {
+          ExpoSpeechRecognitionModule.start({
+            lang: 'tr-TR', interimResults: true, continuous: false,
+            contextualStrings: ['evet', 'hayır'],
+          });
+        });
+        return;
       }
-    } else if (mevcutAdim === 'sigaraYil') {
-      const sayi = parseSayi(sonuc);
-      if (sayi) {
-        const yeniCevaplar = { ...mevcutCevaplar, sigaraYil: sayi };
-        setCevaplar(yeniCevaplar);
-        gecisYap('sigaraPaket', yeniCevaplar);
+      tekrarSayisiRef.current = 0;
+      const yeniCevaplar = { ...cevaplarRef.current, sigaraKullanimi: cevap };
+      setCevaplar(yeniCevaplar);
+      if (cevap === 'evet') {
+        setAdim('sigaraYil');
+        konus('Kaç yıldır sigara kullanıyorsunuz?', () => dinlemeyiBaslat());
       } else {
-        anlasilmadi('sigaraYil');
+        setAdim('alkolSoru');
+        konus('Alkol kullanıyor musunuz?', () => dinlemeyiBaslat());
       }
-    } else if (mevcutAdim === 'sigaraPaket') {
-      const sayi = parseSayi(sonuc);
-      if (sayi) {
-        const yeniCevaplar = { ...mevcutCevaplar, sigaraPaketGun: sayi };
-        setCevaplar(yeniCevaplar);
-        gecisYap('alkolSoru', yeniCevaplar);
-      } else {
-        anlasilmadi('sigaraPaket');
-      }
-    } else if (mevcutAdim === 'alkolSoru') {
-      const cevap = parseEvetHayir(sonuc);
-      if (cevap) {
-        const yeniCevaplar = { ...mevcutCevaplar, alkol: cevap };
-        setCevaplar(yeniCevaplar);
-        gecisYap('ozet', yeniCevaplar);
-      } else {
-        anlasilmadi('alkolSoru');
-      }
-    }
-  };
-
-  const onSesHatasi = (e: SpeechErrorEvent) => {
-    setDinleniyor(false);
-    // Sessizlik veya tanıma hatası — mevcut adımı tekrar et
-    const hataKodu = e.error?.code;
-    if (hataKodu === '7' || hataKodu === '6') {
-      // No match / Speech timeout
-      anlasilmadi(adimRef.current);
-    }
-  };
-
-  const anlasilmadi = (mevcutAdim: AsistanAdim) => {
-    konus('Cevabınızı anlayamadım, lütfen tekrar söyleyin.', () => {
-      // Aynı adımı tekrar et
-      setTimeout(() => sorAdim(mevcutAdim, cevaplarRef.current), 500);
-    });
-  };
-
-  // ==================== ADIM YÖNETİMİ ====================
-
-  const sorAdim = (yeniAdim: AsistanAdim, mevcutCevaplar: SesliAsistanCevaplar) => {
-    const sorular: Record<string, { metin: string; dinle: boolean }> = {
-      sigaraSoru: {
-        metin: 'Sigara kullanıyor musunuz? Evet veya hayır olarak cevaplayın.',
-        dinle: true,
-      },
-      sigaraYil: {
-        metin: 'Kaç yıldır sigara kullanıyorsunuz? Sayı olarak belirtin.',
-        dinle: true,
-      },
-      sigaraPaket: {
-        metin: 'Günde kaç paket içiyorsunuz? Sayı olarak belirtin.',
-        dinle: true,
-      },
-      alkolSoru: {
-        metin: 'Alkol kullanıyor musunuz? Evet veya hayır olarak cevaplayın.',
-        dinle: true,
-      },
-    };
-
-    if (yeniAdim === 'ozet') {
-      ozetiOku(mevcutCevaplar);
       return;
     }
 
-    const soru = sorular[yeniAdim];
-    if (!soru) return;
-
-    konus(soru.metin, () => {
-      if (soru.dinle) {
-        dinlemeyiBaslat();
+    if (su_anki_adim === 'sigaraYil') {
+      const sayi = sayiCikar(metin);
+      if (sayi === null) {
+        tekrarSayisiRef.current++;
+        if (tekrarSayisiRef.current >= 3) {
+          setAdim('alkolSoru');
+          konus('Sayı anlaşılamadı, devam ediyoruz. Alkol kullanıyor musunuz?', () => dinlemeyiBaslat());
+          tekrarSayisiRef.current = 0;
+          return;
+        }
+        konus('Lütfen bir sayı söyleyin. Örneğin: on yıldır.', () => {
+          ExpoSpeechRecognitionModule.start({ lang: 'tr-TR', interimResults: true, continuous: false });
+        });
+        return;
       }
-    });
-  };
-
-  const gecisYap = (yeniAdim: AsistanAdim, yeniCevaplar: SesliAsistanCevaplar) => {
-    setAdim(yeniAdim);
-    adimRef.current = yeniAdim;
-    setTimeout(() => sorAdim(yeniAdim, yeniCevaplar), 600);
-  };
-
-  const ozetiOku = (cv: SesliAsistanCevaplar) => {
-    let ozet = 'Verdiğiniz bilgiler şöyle: ';
-
-    if (cv.sigaraKullanimi === 'evet') {
-      ozet += `Sigara: ${cv.sigaraYil} yıldır, günde ${cv.sigaraPaketGun} paket. `;
-    } else {
-      ozet += 'Sigara kullanmıyorsunuz. ';
+      tekrarSayisiRef.current = 0;
+      const yeniCevaplar = { ...cevaplarRef.current, sigaraYil: sayi };
+      setCevaplar(yeniCevaplar);
+      setAdim('sigaraPaket');
+      konus('Günde kaç paket sigara içiyorsunuz?', () => dinlemeyiBaslat());
+      return;
     }
 
-    if (cv.alkol === 'evet') {
-      ozet += 'Alkol kullanıyorsunuz. ';
-    } else {
-      ozet += 'Alkol kullanmıyorsunuz. ';
+    if (su_anki_adim === 'sigaraPaket') {
+      const sayi = sayiCikar(metin);
+      if (sayi === null) {
+        tekrarSayisiRef.current++;
+        if (tekrarSayisiRef.current >= 3) {
+          setAdim('alkolSoru');
+          konus('Sayı anlaşılamadı, devam ediyoruz. Alkol kullanıyor musunuz?', () => dinlemeyiBaslat());
+          tekrarSayisiRef.current = 0;
+          return;
+        }
+        konus('Lütfen bir sayı söyleyin. Örneğin: bir paket.', () => {
+          ExpoSpeechRecognitionModule.start({ lang: 'tr-TR', interimResults: true, continuous: false });
+        });
+        return;
+      }
+      tekrarSayisiRef.current = 0;
+      const yeniCevaplar = { ...cevaplarRef.current, sigaraPaketGun: sayi };
+      setCevaplar(yeniCevaplar);
+      setAdim('alkolSoru');
+      konus('Alkol kullanıyor musunuz?', () => dinlemeyiBaslat());
+      return;
     }
 
-    ozet += 'Onaylamak için aşağıdaki devam et butonuna basınız.';
+    if (su_anki_adim === 'alkolSoru') {
+      const cevap = evetMiHayirMi(metin);
+      if (cevap === null) {
+        tekrarSayisiRef.current++;
+        if (tekrarSayisiRef.current >= 3) {
+          setAdim('ozet');
+          ozetOku(cevaplarRef.current);
+          tekrarSayisiRef.current = 0;
+          return;
+        }
+        konus('Lütfen evet veya hayır olarak cevaplayın.', () => {
+          ExpoSpeechRecognitionModule.start({
+            lang: 'tr-TR', interimResults: true, continuous: false,
+            contextualStrings: ['evet', 'hayır'],
+          });
+        });
+        return;
+      }
+      tekrarSayisiRef.current = 0;
+      const yeniCevaplar = { ...cevaplarRef.current, alkol: cevap };
+      setCevaplar(yeniCevaplar);
+      setAdim('ozet');
+      ozetOku(yeniCevaplar);
+      return;
+    }
+  }, [konus, dinlemeyiBaslat]);
+
+  // ---------------------------------------------------------------------------
+  // ÖZET OKUMA — GÜNCELLEME: Erişilebilirlik için daha açıklayıcı yönlendirme
+  // ---------------------------------------------------------------------------
+  const ozetOku = useCallback((cv: SesliAsistanCevaplar) => {
+    const sigaraDurum = cv.sigaraKullanimi === 'evet'
+      ? `Sigara kullanıyorsunuz: ${cv.sigaraYil} yıldır, günde ${cv.sigaraPaketGun} paket. `
+      : 'Sigara kullanmıyorsunuz. ';
+    const alkolDurum = cv.alkol === 'evet' ? 'Alkol kullanıyorsunuz. ' : 'Alkol kullanmıyorsunuz. ';
+
+    // Önce özet, sonra net yönlendirme — okuma güçlüğü olan kullanıcı için
+    const ozet =
+      `Verdiğiniz bilgiler şöyle: ${sigaraDurum}${alkolDurum}` +
+      `Şimdi ekranın en altındaki yanıp sönen kırmızı devam et butonuna basın. ` +
+      `Tekrar ediyorum: ekranın en altındaki kırmızı butona basın.`;
 
     konus(ozet, () => {
       setAdim('tamam');
-      adimRef.current = 'tamam';
-      if (options.onTamamlandi) {
-        options.onTamamlandi(cv);
-      }
+      options.onTamamlandi?.(cv);
     });
-  };
+  }, [konus, options]);
 
-  // ==================== DIŞA AÇIK API ====================
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
 
-  /** Ekran açılır açılmaz çağrılır — karşılama mesajını söyler */
   const karsilamayiBaslat = useCallback(() => {
-    if (adimRef.current !== 'kapali') return;
     setAdim('karsilama');
-    adimRef.current = 'karsilama';
     konus(
-      'Sağlık bilgileriniz otomatik olarak doldurulmuştur. ' +
-      'Sesli asistan kullanmak için aşağıdaki mikrofon butonuna basın.'
+      'Sağlık bilgileriniz otomatik olarak dolduruldu. ' +
+      'Alışkanlıklarınız hakkında sorularıma cevap vermek için sağ alttaki mikrofon butonuna basın.'
     );
-  }, []);
+  }, [konus]);
 
-  /** Hasta mikrofon butonuna bastı — soruları sormaya başla */
-  const asistaniBaslat = useCallback(async () => {
-    const izinli = await izinIste();
-    if (!izinli) {
-      setHataMesaji(
-        'Mikrofon izni verilmediği için sesli asistan kullanılamaz. ' +
-        'Lütfen formu manuel olarak doldurun.'
-      );
-      return;
-    }
+  const asistaniBaslat = useCallback(() => {
     setCevaplar(BAŞLANGIÇ_CEVAPLAR);
     cevaplarRef.current = BAŞLANGIÇ_CEVAPLAR;
-    setAdim('aktifBekle');
-    adimRef.current = 'aktifBekle';
-    setTimeout(() => gecisYap('sigaraSoru', BAŞLANGIÇ_CEVAPLAR), 300);
-  }, []);
+    tekrarSayisiRef.current = 0;
+    setHataMesaji(null);
+    setSonAlinanMetin('');
+    setAdim('sigaraSoru');
+    konus('Sigara kullanıyor musunuz? Evet veya hayır olarak cevaplayın.', () => {
+      dinlemeyiBaslat();
+    });
+  }, [konus, dinlemeyiBaslat]);
 
-  /** Asistanı iptal et */
   const asistaniDurdur = useCallback(() => {
     Speech.stop();
-    Voice.stop();
-    setDinleniyor(false);
+    dinlemeyiKes();
     setAdim('kapali');
-    adimRef.current = 'kapali';
+    setSonAlinanMetin('');
+    setHataMesaji(null);
+    tekrarSayisiRef.current = 0;
+  }, [dinlemeyiKes]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        Speech.stop();
+        ExpoSpeechRecognitionModule.stop();
+      } catch {}
+    };
   }, []);
 
   return {

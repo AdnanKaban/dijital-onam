@@ -69,7 +69,9 @@ export default function HastaBilgileriScreen() {
         alkol: cv.alkol === 'evet' ? (tr ? 'Kullanıyor' : 'Yes') :
                cv.alkol === 'hayir' ? (tr ? 'Kullanmıyor' : 'No') : '',
       }));
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 800);
+      // Otomatik aşağı kaydır - hemen ve birkaç saniye sonra tekrar (animasyon bekler)
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 1500);
     },
   });
 
@@ -88,6 +90,7 @@ export default function HastaBilgileriScreen() {
   const mikYanip = useRef(new Animated.Value(1)).current;
   const dinlemePulse = useRef(new Animated.Value(1)).current;
   const devamPulse = useRef(new Animated.Value(1)).current;
+  const devamOpacity = useRef(new Animated.Value(1)).current; // YENİ: kırmızı yanıp sönme
 
   useEffect(() => {
     if (asistanAdim === 'karsilama' || asistanAdim === 'kapali') {
@@ -119,20 +122,34 @@ export default function HastaBilgileriScreen() {
     }
   }, [dinleniyor, dinlemePulse]);
 
+  // Devam et butonu — asistan TAMAM olunca scale pulse + opacity blink
   useEffect(() => {
     if (asistanAdim === 'tamam') {
-      const anim = Animated.loop(
+      // Scale pulse
+      const scaleAnim = Animated.loop(
         Animated.sequence([
-          Animated.timing(devamPulse, { toValue: 1.05, duration: 600, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
-          Animated.timing(devamPulse, { toValue: 1, duration: 600, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+          Animated.timing(devamPulse, { toValue: 1.08, duration: 500, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+          Animated.timing(devamPulse, { toValue: 1, duration: 500, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
         ])
       );
-      anim.start();
-      return () => anim.stop();
+      // Opacity blink (daha yavaş, dikkat çekici)
+      const opacityAnim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(devamOpacity, { toValue: 0.6, duration: 600, useNativeDriver: true }),
+          Animated.timing(devamOpacity, { toValue: 1, duration: 600, useNativeDriver: true }),
+        ])
+      );
+      scaleAnim.start();
+      opacityAnim.start();
+      return () => {
+        scaleAnim.stop();
+        opacityAnim.stop();
+      };
     } else {
       devamPulse.setValue(1);
+      devamOpacity.setValue(1);
     }
-  }, [asistanAdim, devamPulse]);
+  }, [asistanAdim, devamPulse, devamOpacity]);
 
   // E-Devlet verilerini yükle
   useEffect(() => {
@@ -227,7 +244,7 @@ export default function HastaBilgileriScreen() {
       case 'sigaraPaket': return dinleniyor ? '🔴 Dinleniyor: Günde kaç paket?' : '🔊 Soru soruluyor...';
       case 'alkolSoru': return dinleniyor ? '🔴 Dinleniyor: Alkol kullanıyor musunuz?' : '🔊 Soru soruluyor...';
       case 'ozet': return '🔊 Özet okunuyor...';
-      case 'tamam': return '✓ Bilgileriniz alındı, devam edebilirsiniz';
+      case 'tamam': return '✓ Bilgileriniz alındı, kırmızı butona basın';
       default: return '';
     }
   };
@@ -323,7 +340,6 @@ export default function HastaBilgileriScreen() {
               onChange={(v) => updateField('bilinenHastaliklar', v)} multiline
               placeholder={tr ? 'Bildiğiniz hastalıklar.' : 'List conditions.'} fromEDevlet={isFromEDevlet('bilinenHastaliklar')} />
 
-            {/* ALIŞKANLIKLAR — Sesli asistan bu kısmı dolduracak */}
             <View style={styles.aliskanliklarBox}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={[styles.sectionHeader, { marginTop: 0 }]}>{tr ? 'Alışkanlıklar' : 'Habits'}</Text>
@@ -376,11 +392,26 @@ export default function HastaBilgileriScreen() {
               </Text>
             </View>
 
-            <Animated.View style={{ transform: [{ scale: devamPulse }] }}>
+            {/* DEVAM ET BUTONU - asistan tamam olunca kırmızı yanıp söner */}
+            <Animated.View style={{
+              transform: [{ scale: devamPulse }],
+              opacity: asistanAdim === 'tamam' ? devamOpacity : 1,
+            }}>
               <TouchableOpacity
-                style={[styles.continueBtn, asistanAdim === 'tamam' && styles.continueBtnHighlight]}
+                style={[
+                  styles.continueBtn,
+                  asistanAdim === 'tamam' && styles.continueBtnHighlight,
+                ]}
                 onPress={handleContinue}>
-                <Text style={styles.continueBtnText}>{tr ? 'Devam Et →' : 'Continue →'}</Text>
+                {asistanAdim === 'tamam' && (
+                  <Text style={styles.continueBtnIcon}>👉</Text>
+                )}
+                <Text style={[
+                  styles.continueBtnText,
+                  asistanAdim === 'tamam' && styles.continueBtnTextHighlight,
+                ]}>
+                  {tr ? 'Devam Et →' : 'Continue →'}
+                </Text>
               </TouchableOpacity>
             </Animated.View>
           </View>
@@ -431,73 +462,102 @@ function Field({ label, value, onChange, placeholder, multiline, keyboardType, f
   );
 }
 
+// =============================================================================
+// STILLER
+// =============================================================================
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: { padding: 16, paddingTop: 40, paddingBottom: 100 },
+  scrollContent: { padding: 16, paddingBottom: 100 },
   card: {
     backgroundColor: '#fff', borderRadius: 16, padding: 20,
-    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 }, elevation: 4,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },
-  title: { fontSize: 22, fontWeight: 'bold', color: '#C62828', textAlign: 'center', marginBottom: 4 },
-  subtitle: { fontSize: 12, color: '#666', textAlign: 'center', marginBottom: 20 },
-  asistanStatusBar: { backgroundColor: '#1976D2', padding: 12, borderRadius: 10, marginBottom: 16 },
-  asistanStatusText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  asistanLastSpeech: { color: '#BBDEFB', fontSize: 11, marginTop: 4, fontStyle: 'italic' },
-  asistanError: { color: '#FFEBEE', fontSize: 12, marginTop: 4 },
+  title: { fontSize: 22, fontWeight: 'bold', color: '#C62828', textAlign: 'center' },
+  subtitle: { fontSize: 11, color: '#666', textAlign: 'center', marginTop: 4, marginBottom: 12 },
+  asistanStatusBar: {
+    backgroundColor: '#FFF8E1', padding: 10, borderRadius: 8,
+    borderLeftWidth: 4, borderLeftColor: '#FB8C00', marginBottom: 12,
+  },
+  asistanStatusText: { color: '#E65100', fontSize: 13, fontWeight: '600' },
+  asistanLastSpeech: { color: '#5D4037', fontSize: 11, marginTop: 4, fontStyle: 'italic' },
+  asistanError: { color: '#C62828', fontSize: 12, marginTop: 4 },
   eDevletBanner: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#E8F5E9', borderLeftWidth: 4, borderLeftColor: '#2E7D32',
-    padding: 12, borderRadius: 8, marginBottom: 16,
+    backgroundColor: '#E8F5E9', padding: 12, borderRadius: 8,
+    borderLeftWidth: 4, borderLeftColor: '#2E7D32',
+    flexDirection: 'row', alignItems: 'center', marginBottom: 14,
   },
-  eDevletBannerIcon: { fontSize: 22, color: '#2E7D32', fontWeight: 'bold', marginRight: 10 },
-  eDevletBannerText: { flex: 1, fontSize: 12, color: '#1B5E20', lineHeight: 18 },
+  eDevletBannerIcon: { fontSize: 20, color: '#2E7D32', marginRight: 10, fontWeight: 'bold' },
+  eDevletBannerText: { color: '#1B5E20', fontSize: 12, flex: 1, lineHeight: 17 },
   sectionHeader: {
-    fontSize: 16, fontWeight: '700', color: '#C62828',
-    marginTop: 16, marginBottom: 10, paddingBottom: 4,
-    borderBottomWidth: 1, borderBottomColor: '#FFCDD2',
+    fontSize: 14, fontWeight: 'bold', color: '#C62828',
+    marginTop: 14, marginBottom: 8, borderBottomWidth: 1, borderBottomColor: '#FFCDD2', paddingBottom: 4,
   },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  aktifBadge: { fontSize: 11, color: '#1976D2', fontWeight: '600' },
-  aliskanliklarBox: { backgroundColor: '#F5F5F5', padding: 12, borderRadius: 10, marginTop: 8 },
+  aktifBadge: {
+    backgroundColor: '#C62828', color: '#fff', fontSize: 10, fontWeight: 'bold',
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, overflow: 'hidden',
+  },
+  aliskanliklarBox: {
+    backgroundColor: '#FFFBF0', padding: 12, borderRadius: 10,
+    borderWidth: 1, borderColor: '#FFE0B2', marginTop: 10,
+  },
   labelRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  label: { fontSize: 13, color: '#333', fontWeight: '500' },
-  checkMark: { fontSize: 14, color: '#2E7D32', fontWeight: 'bold', marginLeft: 6 },
+  label: { fontSize: 12, color: '#444', fontWeight: '600' },
+  checkMark: { color: '#2E7D32', fontSize: 14, marginLeft: 6, fontWeight: 'bold' },
   input: {
-    borderWidth: 1, borderColor: '#FFCDD2', borderRadius: 8,
-    padding: 10, fontSize: 14, backgroundColor: '#FFF8F8', color: '#222',
+    borderWidth: 1, borderColor: '#ddd', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#222', backgroundColor: '#fff',
   },
   inputMultiline: { minHeight: 60, textAlignVertical: 'top' },
-  inputLocked: { backgroundColor: '#F0F0F0', color: '#555', borderColor: '#DDD' },
+  inputLocked: { backgroundColor: '#F5F5F5', color: '#666' },
   row: { flexDirection: 'row', marginBottom: 8 },
   choiceBtn: {
-    flex: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FFCDD2',
-    backgroundColor: '#FFF8F8', alignItems: 'center', marginHorizontal: 4,
+    flex: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd',
+    alignItems: 'center', marginHorizontal: 4, backgroundColor: '#fff',
   },
   choiceBtnActive: { backgroundColor: '#C62828', borderColor: '#C62828' },
-  choiceBtnDisabled: { opacity: 0.7 },
-  choiceBtnText: { color: '#C62828', fontWeight: '600' },
+  choiceBtnDisabled: { opacity: 0.6 },
+  choiceBtnText: { color: '#444', fontWeight: '600', fontSize: 13 },
   choiceBtnTextActive: { color: '#fff' },
   staffNotice: {
-    marginTop: 24, padding: 14, borderRadius: 10,
-    backgroundColor: '#FFF3E0', borderLeftWidth: 4, borderLeftColor: '#FB8C00',
+    backgroundColor: '#E3F2FD', padding: 12, borderRadius: 8,
+    borderLeftWidth: 4, borderLeftColor: '#1976D2', marginTop: 14,
   },
-  staffNoticeTitle: { fontWeight: 'bold', color: '#E65100', marginBottom: 6, fontSize: 14 },
-  staffNoticeText: { color: '#5D4037', fontSize: 12, lineHeight: 18 },
-  continueBtn: { marginTop: 24, backgroundColor: '#C62828', padding: 16, borderRadius: 12, alignItems: 'center' },
+  staffNoticeTitle: { fontWeight: 'bold', color: '#0D47A1', fontSize: 12, marginBottom: 4 },
+  staffNoticeText: { color: '#1A237E', fontSize: 11, lineHeight: 16 },
+
+  // DEVAM ET BUTONU - normal hali
+  continueBtn: {
+    backgroundColor: '#C62828', padding: 16, borderRadius: 12,
+    alignItems: 'center', marginTop: 18, flexDirection: 'row', justifyContent: 'center',
+  },
+  // DEVAM ET BUTONU - asistan tamam olunca (vurgulu kırmızı)
   continueBtnHighlight: {
-    backgroundColor: '#2E7D32', shadowColor: '#2E7D32', shadowOpacity: 0.5,
-    shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8,
+    backgroundColor: '#D32F2F',
+    borderWidth: 3,
+    borderColor: '#FFEB3B',
+    shadowColor: '#FF0000',
+    shadowOpacity: 0.6,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 12,
+    padding: 20,
   },
+  continueBtnIcon: { fontSize: 22, marginRight: 8 },
   continueBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  continueBtnTextHighlight: { fontSize: 19 },
+
+  // MIKROFON BUTONU
   mikButton: {
     position: 'absolute', bottom: 24, right: 24,
-    shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 }, elevation: 8,
+    width: 64, height: 64, borderRadius: 32,
   },
   mikButtonInner: {
-    width: 64, height: 64, borderRadius: 32, backgroundColor: '#1976D2',
-    justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff',
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: '#C62828', alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 }, elevation: 6,
   },
   mikButtonDinleniyor: { backgroundColor: '#D32F2F' },
   mikButtonTamam: { backgroundColor: '#2E7D32' },

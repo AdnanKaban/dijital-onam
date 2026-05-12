@@ -10,23 +10,6 @@ import {
 } from 'react-native';
 import { eDevletGirisYap } from '../data/mockHastaDatabase';
 
-// =============================================================================
-// GİRİŞ EKRANI (Uygulamanın ilk ekranı, "/" route)
-// Kullanıcı e-Devlet ile giriş yaparak hasta verilerini sisteme aktarır.
-//
-// Akış:
-//   1. Kullanıcı "e-Devlet ile Giriş Yap" butonuna basar
-//   2. Loading: "Doğrulanıyor..." (yaklaşık 1.5 saniye, simülasyon)
-//   3. Karşılama: "Hoş geldiniz Ayşe Hanım" (2 saniye)
-//   4. Dil seçimi ekranına yönlendirme (/dil-secimi)
-//
-// AKADEMİK NOT:
-// Gerçek bir e-Devlet entegrasyonunda bu adım SSO (Single Sign-On) protokolü
-// üzerinden yapılır. Telefonda zaten oturum açılmış e-Devlet hesabı varsa,
-// kimlik bilgileri otomatik olarak alınır. Bu uygulama bu davranışı simüle
-// etmektedir.
-// =============================================================================
-
 type Durum = 'bekliyor' | 'dogrulaniyor' | 'karsilamaEkrani';
 
 export default function GirisEkrani() {
@@ -36,16 +19,12 @@ export default function GirisEkrani() {
 
   const handleEDevletGiris = async () => {
     setDurum('dogrulaniyor');
-
     try {
       const hasta = await eDevletGirisYap();
-
       const ilkAd = hasta.adSoyad.split(' ')[0];
       const unvan = hasta.cinsiyet === 'kadin' ? 'Hanım' : 'Bey';
       setHastaAdi(`${ilkAd} ${unvan}`);
-
       setDurum('karsilamaEkrani');
-
       setTimeout(() => {
         router.push({
           pathname: '/dil-secimi',
@@ -96,6 +75,27 @@ export default function GirisEkrani() {
               Bilgileriniz kimlik doğrulama sonrasında sistem üzerinden otomatik
               olarak alınacaktır.
             </Text>
+
+            {/* GEÇİCİ — Test butonları (tezde kaldırılacak) */}
+            <View style={styles.testGrup}>
+              <Text style={styles.testGrupLabel}>🔧 Geliştirici Testleri</Text>
+
+              <TouchableOpacity
+                style={[styles.testButton, { backgroundColor: '#FFA000' }]}
+                onPress={() => router.push('/mikrofon-test')}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.testButtonText}>🎤 Mikrofon Kayıt Testi</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.testButton, { backgroundColor: '#7B1FA2' }]}
+                onPress={() => router.push('/stt-test')}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.testButtonText}>🎙️ Ses Tanıma (STT) Testi</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -128,101 +128,64 @@ export default function GirisEkrani() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  headerBox: {
-    alignItems: 'center',
-    marginBottom: 48,
-  },
+  content: { flex: 1, justifyContent: 'center', paddingHorizontal: 24 },
+  headerBox: { alignItems: 'center', marginBottom: 48 },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    textAlign: 'center',
-    marginBottom: 8,
+    fontSize: 24, fontWeight: 'bold', color: '#fff',
+    textAlign: 'center', marginBottom: 8,
   },
-  subtitle: {
-    fontSize: 13,
-    color: '#FFE0E0',
-    textAlign: 'center',
-  },
+  subtitle: { fontSize: 13, color: '#FFE0E0', textAlign: 'center' },
   cardWrapper: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    minHeight: 220,
-    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 16,
+    padding: 24, alignItems: 'center', minHeight: 220, justifyContent: 'center',
   },
   welcomeText: {
-    fontSize: 15,
-    color: '#fff',
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 22,
+    fontSize: 15, color: '#fff', textAlign: 'center',
+    marginBottom: 24, lineHeight: 22,
   },
   loginButton: {
-    backgroundColor: '#fff',
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    backgroundColor: '#fff', paddingVertical: 16, paddingHorizontal: 32,
+    borderRadius: 12, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', width: '100%',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
-  loginButtonIcon: {
-    fontSize: 22,
-    marginRight: 10,
-  },
-  loginButtonText: {
-    color: '#C62828',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
+  loginButtonIcon: { fontSize: 22, marginRight: 10 },
+  loginButtonText: { color: '#C62828', fontWeight: 'bold', fontSize: 16 },
   helperText: {
-    fontSize: 12,
+    fontSize: 12, color: '#FFE0E0', textAlign: 'center',
+    marginTop: 16, lineHeight: 18, fontStyle: 'italic',
+  },
+  testGrup: {
+    marginTop: 24,
+    width: '100%',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.3)',
+  },
+  testGrupLabel: {
     color: '#FFE0E0',
+    fontSize: 11,
     textAlign: 'center',
-    marginTop: 16,
-    lineHeight: 18,
+    marginBottom: 10,
     fontStyle: 'italic',
   },
+  testButton: {
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginVertical: 4,
+    alignItems: 'center',
+  },
+  testButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
   statusText: {
-    fontSize: 16,
-    color: '#fff',
-    fontWeight: '600',
-    marginTop: 20,
-    textAlign: 'center',
+    fontSize: 16, color: '#fff', fontWeight: '600',
+    marginTop: 20, textAlign: 'center',
   },
   statusSubText: {
-    fontSize: 13,
-    color: '#FFE0E0',
-    marginTop: 6,
-    textAlign: 'center',
+    fontSize: 13, color: '#FFE0E0', marginTop: 6, textAlign: 'center',
   },
-  checkIcon: {
-    fontSize: 64,
-    color: '#fff',
-    marginBottom: 8,
-  },
-  welcomeBig: {
-    fontSize: 22,
-    color: '#fff',
-    marginBottom: 4,
-  },
-  welcomeName: {
-    fontSize: 26,
-    color: '#fff',
-    fontWeight: 'bold',
-    marginBottom: 16,
-  },
+  checkIcon: { fontSize: 64, color: '#fff', marginBottom: 8 },
+  welcomeBig: { fontSize: 22, color: '#fff', marginBottom: 4 },
+  welcomeName: { fontSize: 26, color: '#fff', fontWeight: 'bold', marginBottom: 16 },
 });
