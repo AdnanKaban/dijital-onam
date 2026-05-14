@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   ScrollView,
@@ -10,46 +10,47 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SECTIONS, Section } from '../data/bilgilendirmeMetinleri';
 
-// =============================================================================
-// BİLGİLENDİRME EKRANI (İKİ DİLLİ)
-// Anestezi Hasta Bilgilendirme ve Rıza Belgesi (HB.RB.01)
-//
-// AKIŞ:
-// 1. Hastaya 10 bölümlük bilgilendirme metni gösterilir (TR/EN)
-// 2. Her bölümün altındaki "Okudum" kutusu işaretlenir
-// 3. TTS ile sesli dinleme (dil seçimine göre tr-TR veya en-US)
-// 4. Tüm bölümler okunduktan sonra Genel Onay Beyanı işaretlenir
-// 5. İmza ekranına geçilir (paramlar taşınır)
-//
-// AKADEMİK NOT:
-// İngilizce metin onaysız çeviridir, klinik kullanım için tıbbi onay gerekir.
-// Detay için data/bilgilendirmeMetinleri.ts içindeki başlık yorumuna bakınız.
-// =============================================================================
+import { SECTIONS, Section } from '../data/bilgilendirmeMetinleri';
+import { useBilgilendirmeAsistani } from '../hooks/useBilgilendirmeAsistani';
 
 export default function BilgilendirmeScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const tr = params.lang !== 'en';
 
+  const scrollRef = useRef<ScrollView>(null);
+  const sectionYMap = useRef<Record<string, number>>({});
+  const finalBoxY = useRef<number>(0);
+
   const [readSections, setReadSections] = useState<Set<string>>(new Set());
-  const [confirmed, setConfirmed] = useState<boolean>(false);
   const [speakingSection, setSpeakingSection] = useState<string | null>(null);
+  const [sesliAkisAktif, setSesliAkisAktif] = useState(false);
+  const [aktifSesliIndex, setAktifSesliIndex] = useState<number | null>(null);
+  const [onayBeklenenBolum, setOnayBeklenenBolum] = useState<number | null>(null);
+  const [finalKararBekleniyor, setFinalKararBekleniyor] = useState(false);
 
-  useEffect(() => {
-    return () => {
-      Speech.stop();
-    };
-  }, []);
+  const allSectionsRead = readSections.size === SECTIONS.length;
 
-  // Dil değiştiğinde okunan bölümleri sıfırla (kullanıcı yeni dilde tekrar okumalı)
-  // ama params.lang muhtemelen sabit kalacağı için bu effect pratikte çalışmaz
-  // sadece güvenlik için ekledim
-  useEffect(() => {
-    setReadSections(new Set());
-    setConfirmed(false);
-  }, [params.lang]);
+  const scrollToY = (y: number) => {
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({
+        y: Math.max(y - 20, 0),
+        animated: true,
+      });
+    }, 250);
+  };
+
+  const scrollToSection = (sectionId: string) => {
+    const y = sectionYMap.current[sectionId];
+    if (typeof y === 'number') {
+      scrollToY(y);
+    }
+  };
+
+  const scrollToFinalBox = () => {
+    scrollToY(finalBoxY.current);
+  };
 
   const toggleRead = (id: string) => {
     setReadSections((prev) => {
@@ -60,61 +61,304 @@ export default function BilgilendirmeScreen() {
     });
   };
 
-  const speakSection = async (section: Section) => {
+  const markSectionRead = (id: string) => {
+    setReadSections((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+
+  const ttsMetniTemizle = (metin: string) => {
+    return metin
+      .replace(/EPİDURAL/g, 'Epidural')
+      .replace(/EPIDURAL/g, 'Epidural')
+      .replace(/SPİNAL/g, 'Spinal')
+      .replace(/SPINAL/g, 'Spinal')
+      .replace(/PLEKSUS/g, 'Pleksus')
+      .replace(/PLEXUS/g, 'Plexus')
+      .replace(/PERİFERİK/g, 'Periferik')
+      .replace(/PERIFERIK/g, 'Periferik')
+      .replace(/SANTRAL/g, 'Santral')
+      .replace(/CENTRAL/g, 'Central')
+      .replace(/ARTER/g, 'Arter')
+      .replace(/KANÜLÜ/g, 'Kanülü')
+      .replace(/KANULU/g, 'Kanülü')
+      .replace(/UYGULAMASI/g, 'Uygulaması')
+      .replace(/ALTERNATİF/g, 'Alternatif')
+      .replace(/ALTERNATIVE/g, 'Alternative')
+      .replace(/RİSKLERİ/g, 'Riskleri')
+      .replace(/RISKS/g, 'Risks')
+      .replace(/GEREKTİĞİNDE/g, 'Gerektiğinde')
+      .replace(/GEREKTIGINDE/g, 'Gerektiğinde')
+      .replace(/TIBBİ/g, 'Tıbbi')
+      .replace(/TIBBI/g, 'Tıbbi')
+      .replace(/ANESTEZİYE/g, 'Anesteziye')
+      .replace(/ANESTEZIYE/g, 'Anesteziye')
+      .replace(/ANESTEZİDEN/g, 'Anesteziden')
+      .replace(/ANESTEZIDEN/g, 'Anesteziden')
+      .replace(/ANESTEZİNİN/g, 'Anestezinin')
+      .replace(/ANESTEZININ/g, 'Anestezinin')
+      .replace(/ANESTEZİ/g, 'Anestezi')
+      .replace(/ANESTEZI/g, 'Anestezi')
+      .replace(/\bEKG\b/g, 'E K G')
+      .replace(/\bECG\b/g, 'E C G')
+      .replace(/\bIV\b/g, 'damar içi')
+      .replace(/\bMR\b/g, 'Emar')
+      .replace(/\bBT\b/g, 'Bilgisayarlı tomografi')
+      .replace(/\bASA\b/g, 'A S A')
+      .replace(/K\.B\.Ü\./g, 'Karabük Üniversitesi')
+      .replace(/K\.B\.U\./g, 'Karabük Üniversitesi')
+      .replace(/HB\.RB\.01/g, 'H B R B sıfır bir')
+      .replace(/Rev\. No/g, 'Revizyon numarası')
+      .replace(/1\/10\.000/g, 'on binde bir')
+      .replace(/1\/250000/g, 'iki yüz elli binde bir')
+      .replace(/1-4/g, 'bir ile dört')
+      .replace(/2-6/g, 'iki ile altı')
+      .replace(/\bI-/g, 'Birinci madde:')
+      .replace(/\bII-/g, 'İkinci madde:')
+      .replace(/\bIII-/g, 'Üçüncü madde:')
+      .replace(/\bIV-/g, 'Dördüncü madde:')
+      .replace(/\bV-/g, 'Beşinci madde:')
+      .replace(/\bVI-/g, 'Altıncı madde:')
+      .replace(/\bVII-/g, 'Yedinci madde:')
+      .replace(/\bVIII-/g, 'Sekizinci madde:')
+      .replace(/["“”]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  const getSectionFullText = (section: Section) => {
+    const lang = tr ? 'tr' : 'en';
+    const title = section.title[lang];
+    const paragraphs = section.paragraphs.map((p) => p[lang]).join(' ');
+    return ttsMetniTemizle(`${title}. ${paragraphs}`);
+  };
+
+  const speakSectionManual = async (section: Section) => {
+    if (!tr) return;
+
     if (speakingSection === section.id) {
       Speech.stop();
       setSpeakingSection(null);
       return;
     }
 
+    bilgilendirmeAsistani.durdur();
     Speech.stop();
-    const lang = tr ? 'tr' : 'en';
-    const title = section.title[lang];
-    const paragraphs = section.paragraphs.map((p) => p[lang]).join(' ');
-    const fullText = title + '. ' + paragraphs;
     setSpeakingSection(section.id);
 
-    Speech.speak(fullText, {
-      language: tr ? 'tr-TR' : 'en-US',
-      rate: 0.95,
+    Speech.speak(getSectionFullText(section), {
+      language: 'tr-TR',
+      rate: 0.84,
+      pitch: 1.0,
       onDone: () => setSpeakingSection(null),
       onStopped: () => setSpeakingSection(null),
       onError: () => setSpeakingSection(null),
     });
   };
 
-  const allSectionsRead = readSections.size === SECTIONS.length;
+  const tamamlaSesliBilgilendirme = () => {
+    setAktifSesliIndex(null);
+    setOnayBeklenenBolum(null);
+    setSpeakingSection(null);
+    setFinalKararBekleniyor(true);
 
-  const handleContinue = () => {
+    setTimeout(() => {
+      scrollToFinalBox();
+    }, 400);
+  };
+
+  const sesliBolumuOku = (index: number) => {
+    if (!tr) return;
+
+    if (index < 0 || index >= SECTIONS.length) {
+      tamamlaSesliBilgilendirme();
+      return;
+    }
+
+    const section = SECTIONS[index];
+
+    setSesliAkisAktif(true);
+    setFinalKararBekleniyor(false);
+    setOnayBeklenenBolum(null);
+    setAktifSesliIndex(index);
+    setSpeakingSection(section.id);
+
+    bilgilendirmeAsistani.durdur();
+    Speech.stop();
+    scrollToSection(section.id);
+
+    setTimeout(() => {
+      Speech.speak(getSectionFullText(section), {
+        language: 'tr-TR',
+        rate: 0.84,
+        pitch: 1.0,
+        onDone: () => {
+          setSpeakingSection(null);
+          setOnayBeklenenBolum(index);
+        },
+        onStopped: () => {
+          setSpeakingSection(null);
+        },
+        onError: () => {
+          setSpeakingSection(null);
+          setOnayBeklenenBolum(index);
+        },
+      });
+    }, 600);
+  };
+
+  const bolumuOnaylaVeSonrakineGec = () => {
+    if (onayBeklenenBolum === null) return;
+
+    const section = SECTIONS[onayBeklenenBolum];
+    markSectionRead(section.id);
+
+    const nextIndex = onayBeklenenBolum + 1;
+    setOnayBeklenenBolum(null);
+
+    if (nextIndex < SECTIONS.length) {
+      setTimeout(() => {
+        sesliBolumuOku(nextIndex);
+      }, 700);
+    } else {
+      setTimeout(() => {
+        tamamlaSesliBilgilendirme();
+      }, 700);
+    }
+  };
+
+  const bolumuTekrarDinle = () => {
+    if (onayBeklenenBolum === null) return;
+
+    const tekrarIndex = onayBeklenenBolum;
+    setOnayBeklenenBolum(null);
+
+    setTimeout(() => {
+      sesliBolumuOku(tekrarIndex);
+    }, 300);
+  };
+
+  const sesliAkisiBaslat = () => {
+    if (!tr) return;
+
+    Speech.stop();
+    bilgilendirmeAsistani.durdur();
+
+    const ilkOkunmayanIndex = SECTIONS.findIndex(
+      (section) => !readSections.has(section.id)
+    );
+
+    if (ilkOkunmayanIndex === -1) {
+      tamamlaSesliBilgilendirme();
+      return;
+    }
+
+    setSesliAkisAktif(true);
+    setFinalKararBekleniyor(false);
+    setOnayBeklenenBolum(null);
+
+    sesliBolumuOku(ilkOkunmayanIndex);
+  };
+
+  const sesliAkisiDurdur = () => {
+    Speech.stop();
+    bilgilendirmeAsistani.durdur();
+
+    setSesliAkisAktif(false);
+    setAktifSesliIndex(null);
+    setOnayBeklenenBolum(null);
+    setFinalKararBekleniyor(false);
+    setSpeakingSection(null);
+  };
+
+  const handleKarar = (karar: 'onay' | 'red') => {
     if (!allSectionsRead) {
       Alert.alert(
-        tr ? 'Eksik Onay' : 'Incomplete Confirmation',
+        tr ? 'Eksik Bilgilendirme' : 'Incomplete Information',
         tr
-          ? 'Lütfen tüm bölümleri okuduğunuzu işaretleyiniz. Her bölümün sonundaki "Bu bölümü okudum ve anladım" kutusunu işaretlemeniz gerekmektedir.'
-          : 'Please mark that you have read all sections. You must check the "I have read and understood this section" box at the end of each section.'
+          ? 'Lütfen tüm bölümleri okuduğunuzu veya dinlediğinizi işaretleyiniz.'
+          : 'Please mark all sections as read.'
       );
       return;
     }
-    if (!confirmed) {
-      Alert.alert(
-        tr ? 'Genel Onay Gerekli' : 'General Consent Required',
-        tr
-          ? 'Lütfen "Aydınlatılmış onam formunun içeriğini okudum, anladım ve onay veriyorum" beyanını onaylayınız.'
-          : 'Please confirm the statement "I have read, understood, and consent to the content of the informed consent form".'
-      );
-      return;
-    }
+
     Speech.stop();
-    router.push({ pathname: '/imza', params });
+    bilgilendirmeAsistani.durdur();
+
+    router.push({
+      pathname: '/imza',
+      params: {
+        ...params,
+        bilgilendirmeOkundu: 'true',
+        hastaKarari: karar,
+      },
+    });
   };
+
+  const bilgilendirmeAsistani = useBilgilendirmeAsistani({
+    aktif: tr && sesliAkisAktif,
+    tr,
+
+    onayBekleniyor: onayBeklenenBolum !== null,
+    kararBekleniyor: finalKararBekleniyor,
+
+    onBolumOnayla: bolumuOnaylaVeSonrakineGec,
+    onBolumTekrar: bolumuTekrarDinle,
+
+    onKararOnay: () => handleKarar('onay'),
+    onKararRed: () => handleKarar('red'),
+  });
+
+  useEffect(() => {
+    return () => {
+      Speech.stop();
+      bilgilendirmeAsistani.durdur();
+    };
+  }, []);
+
+  useEffect(() => {
+    setReadSections(new Set());
+    setSpeakingSection(null);
+    setSesliAkisAktif(false);
+    setAktifSesliIndex(null);
+    setOnayBeklenenBolum(null);
+    setFinalKararBekleniyor(false);
+  }, [params.lang]);
+
+  useEffect(() => {
+    if (!tr) return;
+
+    const timer = setTimeout(() => {
+      sesliAkisiBaslat();
+    }, 900);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [tr]);
+
+  useEffect(() => {
+    if (!tr) return;
+    if (!sesliAkisAktif) return;
+    if (onayBeklenenBolum === null && !finalKararBekleniyor) return;
+
+    const timer = setTimeout(() => {
+      bilgilendirmeAsistani.baslat();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [tr, onayBeklenenBolum, finalKararBekleniyor, sesliAkisAktif]);
 
   return (
     <LinearGradient colors={['#E57373', '#C62828']} style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.scrollContent}>
         <View style={styles.card}>
           <Text style={styles.title}>
             {tr ? 'Anestezi Hasta Bilgilendirme' : 'Anesthesia Patient Information'}
           </Text>
+
           <Text style={styles.subtitle}>
             {tr
               ? 'K.B.Ü. Karabük Eğitim ve Araştırma Hastanesi'
@@ -123,7 +367,6 @@ export default function BilgilendirmeScreen() {
             {tr ? 'Doküman Kodu' : 'Document Code'}: HB.RB.01 | Rev. No: 05
           </Text>
 
-          {/* İngilizce uyarısı: çeviri klinik onay almamıştır */}
           {!tr && (
             <View style={styles.translationWarning}>
               <Text style={styles.translationWarningText}>
@@ -134,10 +377,60 @@ export default function BilgilendirmeScreen() {
             </View>
           )}
 
+          {tr && (
+            <View style={styles.voiceFlowBox}>
+              <Text style={styles.voiceFlowTitle}>
+                🎤 Sesli Bilgilendirme Asistanı
+              </Text>
+
+              <Text style={styles.voiceFlowText}>
+                Sistem tüm bölümleri sırayla sesli okuyacaktır. Her bölümden sonra
+                “okudum” diyerek ilerleyebilir veya “tekrar” diyerek aynı bölümü
+                yeniden dinleyebilirsiniz.
+              </Text>
+
+              <TouchableOpacity
+                style={sesliAkisAktif ? styles.voiceStopBtn : styles.voiceStartBtn}
+                onPress={sesliAkisAktif ? sesliAkisiDurdur : sesliAkisiBaslat}
+              >
+                <Text style={styles.voiceBtnText}>
+                  {sesliAkisAktif
+                    ? '⏹ Sesli Akışı Durdur'
+                    : '▶ Sesli Bilgilendirmeyi Başlat'}
+                </Text>
+              </TouchableOpacity>
+
+              {sesliAkisAktif && (
+                <Text style={styles.voiceStatusText}>
+                  {speakingSection
+                    ? '🔊 Bölüm okunuyor...'
+                    : bilgilendirmeAsistani.dinleniyor
+                    ? '🎤 Dinleniyor...'
+                    : onayBeklenenBolum !== null
+                    ? 'Cevabınız bekleniyor: “okudum” veya “tekrar”'
+                    : finalKararBekleniyor
+                    ? 'Kararınız bekleniyor.'
+                    : ''}
+                </Text>
+              )}
+
+              {bilgilendirmeAsistani.sonAlinanMetin ? (
+                <Text style={styles.detectedText}>
+                  Algılanan ifade: {bilgilendirmeAsistani.sonAlinanMetin}
+                </Text>
+              ) : null}
+
+              {bilgilendirmeAsistani.hataMesaji ? (
+                <Text style={styles.errorText}>{bilgilendirmeAsistani.hataMesaji}</Text>
+              ) : null}
+            </View>
+          )}
+
           <View style={styles.progressBox}>
             <Text style={styles.progressText}>
-              {tr ? 'Okunan bölüm' : 'Sections read'}: {readSections.size} / {SECTIONS.length}
+              {tr ? 'Tamamlanan bölüm' : 'Completed sections'}: {readSections.size} / {SECTIONS.length}
             </Text>
+
             <View style={styles.progressBarBg}>
               <View
                 style={[
@@ -150,36 +443,48 @@ export default function BilgilendirmeScreen() {
 
           <Text style={styles.intro}>
             {tr
-              ? 'Aşağıda anestezi uygulamaları hakkında detaylı bilgilendirme metni yer almaktadır. Her bölümü dikkatlice okuyunuz. Dilerseniz "🔊 Sesli Dinle" butonu ile metni sesli olarak da dinleyebilirsiniz. Her bölümün altındaki kutucuğu işaretleyerek okuduğunuzu beyan etmeniz gerekmektedir.'
-              : 'Detailed information about anesthesia procedures is provided below. Please read each section carefully. You may also use the "🔊 Listen" button to hear the text. You must check the box at the end of each section to confirm you have read it.'}
+              ? 'Aşağıda anestezi uygulamaları hakkında detaylı bilgilendirme metni yer almaktadır. Her bölümü dikkatlice okuyunuz. Sesli asistan metni otomatik olarak okuyacaktır. Her bölümün altındaki kutucuğu işaretleyerek veya sesli olarak “okudum” diyerek okuduğunuzu veya dinlediğinizi beyan etmeniz gerekmektedir.'
+              : 'Detailed information about anesthesia procedures is provided below. Please read each section carefully. You must check each section to declare that you have read and understood it.'}
           </Text>
 
           {SECTIONS.map((section, idx) => {
             const lang = tr ? 'tr' : 'en';
+            const aktif = aktifSesliIndex === idx;
+            const okunmus = readSections.has(section.id);
+
             return (
-              <View key={section.id} style={styles.section}>
+              <View
+                key={section.id}
+                style={[
+                  styles.section,
+                  aktif && styles.sectionActive,
+                  okunmus && styles.sectionCompleted,
+                ]}
+                onLayout={(event) => {
+                  sectionYMap.current[section.id] = event.nativeEvent.layout.y;
+                }}
+              >
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionNumber}>{idx + 1}</Text>
+                  <Text style={[styles.sectionNumber, okunmus && styles.sectionNumberDone]}>
+                    {okunmus ? '✓' : idx + 1}
+                  </Text>
+
                   <Text style={styles.sectionTitle}>{section.title[lang]}</Text>
                 </View>
 
-                <TouchableOpacity
-                  style={[
-                    styles.speakBtn,
-                    speakingSection === section.id && styles.speakBtnActive,
-                  ]}
-                  onPress={() => speakSection(section)}
-                >
-                  <Text style={styles.speakBtnText}>
-                    {speakingSection === section.id
-                      ? tr
-                        ? '⏸ Durdur'
-                        : '⏸ Stop'
-                      : tr
-                      ? '🔊 Sesli Dinle'
-                      : '🔊 Listen'}
-                  </Text>
-                </TouchableOpacity>
+                {tr && (
+                  <TouchableOpacity
+                    style={[
+                      styles.speakBtn,
+                      speakingSection === section.id && styles.speakBtnActive,
+                    ]}
+                    onPress={() => speakSectionManual(section)}
+                  >
+                    <Text style={styles.speakBtnText}>
+                      {speakingSection === section.id ? '⏸ Durdur' : '🔊 Sesli Dinle'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
                 {section.paragraphs.map((p, i) => (
                   <Text key={i} style={styles.paragraph}>
@@ -188,25 +493,16 @@ export default function BilgilendirmeScreen() {
                 ))}
 
                 <TouchableOpacity
-                  style={[
-                    styles.readCheck,
-                    readSections.has(section.id) && styles.readCheckActive,
-                  ]}
+                  style={[styles.readCheck, okunmus && styles.readCheckActive]}
                   onPress={() => toggleRead(section.id)}
                 >
-                  <View
-                    style={[
-                      styles.checkbox,
-                      readSections.has(section.id) && styles.checkboxActive,
-                    ]}
-                  >
-                    {readSections.has(section.id) && (
-                      <Text style={styles.checkboxTick}>✓</Text>
-                    )}
+                  <View style={[styles.checkbox, okunmus && styles.checkboxActive]}>
+                    {okunmus && <Text style={styles.checkboxTick}>✓</Text>}
                   </View>
+
                   <Text style={styles.readCheckText}>
                     {tr
-                      ? 'Bu bölümü okudum ve anladım'
+                      ? 'Bu bölümü okudum/dinledim ve anladım'
                       : 'I have read and understood this section'}
                   </Text>
                 </TouchableOpacity>
@@ -214,39 +510,63 @@ export default function BilgilendirmeScreen() {
             );
           })}
 
-          <View style={styles.finalConfirmBox}>
+          <View
+            style={[
+              styles.finalConfirmBox,
+              allSectionsRead && styles.finalConfirmBoxActive,
+            ]}
+            onLayout={(event) => {
+              finalBoxY.current = event.nativeEvent.layout.y;
+            }}
+          >
             <Text style={styles.finalConfirmTitle}>
-              {tr ? 'Genel Onay Beyanı' : 'General Consent Statement'}
+              {tr ? 'Genel Beyan' : 'General Statement'}
             </Text>
+
             <Text style={styles.finalConfirmText}>
               {tr
-                ? 'Aşağıdaki kutuyu işaretleyerek beyan ediyorum:\n\n"Aydınlatılmış onam formunun içeriğini okudum, anladım ve onay veriyorum."'
-                : 'By checking the box below, I declare:\n\n"I have read, understood, and consent to the content of the informed consent form."'}
+                ? 'Tüm bilgilendirme bölümlerini okuduğumu/dinlediğimi ve anladığımı beyan ederim.\n\nKararım:'
+                : 'I declare that I have read and understood all information sections.\n\nMy decision:'}
             </Text>
+
+            {!allSectionsRead && (
+              <Text style={styles.finalWarningText}>
+                {tr
+                  ? 'Karar verebilmek için önce tüm bölümleri tamamlamanız gerekmektedir.'
+                  : 'You must complete all sections before making a decision.'}
+              </Text>
+            )}
+
             <TouchableOpacity
-              style={[styles.readCheck, confirmed && styles.readCheckActive]}
-              onPress={() => setConfirmed(!confirmed)}
+              style={[
+                styles.confirmDecisionBtn,
+                !allSectionsRead && styles.decisionBtnDisabled,
+              ]}
+              disabled={!allSectionsRead}
+              onPress={() => handleKarar('onay')}
             >
-              <View style={[styles.checkbox, confirmed && styles.checkboxActive]}>
-                {confirmed && <Text style={styles.checkboxTick}>✓</Text>}
-              </View>
-              <Text style={styles.readCheckText}>
-                {tr ? 'Onay veriyorum' : 'I consent'}
+              <Text style={styles.decisionBtnText}>
+                ✅ {tr
+                  ? 'Bilgilendirildim ve Onaylıyorum'
+                  : 'I Am Informed and I Consent'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.refuseDecisionBtn,
+                !allSectionsRead && styles.decisionBtnDisabled,
+              ]}
+              disabled={!allSectionsRead}
+              onPress={() => handleKarar('red')}
+            >
+              <Text style={styles.decisionBtnText}>
+                ❌ {tr
+                  ? 'Bilgilendirildim ve Reddediyorum'
+                  : 'I Am Informed and I Refuse'}
               </Text>
             </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            style={[
-              styles.continueBtn,
-              (!allSectionsRead || !confirmed) && styles.continueBtnDisabled,
-            ]}
-            onPress={handleContinue}
-          >
-            <Text style={styles.continueBtnText}>
-              {tr ? 'İmzaya Geç →' : 'Proceed to Signature →'}
-            </Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     </LinearGradient>
@@ -255,7 +575,11 @@ export default function BilgilendirmeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: { padding: 16, paddingTop: 40, paddingBottom: 40 },
+  scrollContent: {
+    padding: 16,
+    paddingTop: 40,
+    paddingBottom: 40,
+  },
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -292,6 +616,61 @@ const styles = StyleSheet.create({
     color: '#5D4037',
     lineHeight: 16,
     fontStyle: 'italic',
+  },
+  voiceFlowBox: {
+    backgroundColor: '#E3F2FD',
+    borderLeftWidth: 4,
+    borderLeftColor: '#1976D2',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 16,
+  },
+  voiceFlowTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#0D47A1',
+    marginBottom: 8,
+  },
+  voiceFlowText: {
+    fontSize: 13,
+    color: '#263238',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  voiceStartBtn: {
+    backgroundColor: '#1976D2',
+    padding: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  voiceStopBtn: {
+    backgroundColor: '#B71C1C',
+    padding: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  voiceBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  voiceStatusText: {
+    marginTop: 10,
+    color: '#0D47A1',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  detectedText: {
+    marginTop: 6,
+    color: '#1565C0',
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  errorText: {
+    marginTop: 6,
+    color: '#B71C1C',
+    fontSize: 12,
+    fontWeight: '600',
   },
   progressBox: {
     backgroundColor: '#FFF3E0',
@@ -331,6 +710,16 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     borderLeftColor: '#C62828',
   },
+  sectionActive: {
+    backgroundColor: '#E3F2FD',
+    borderLeftColor: '#1976D2',
+    borderWidth: 1,
+    borderColor: '#90CAF9',
+  },
+  sectionCompleted: {
+    backgroundColor: '#F1F8E9',
+    borderLeftColor: '#4CAF50',
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -347,6 +736,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginRight: 10,
     fontSize: 13,
+  },
+  sectionNumberDone: {
+    backgroundColor: '#4CAF50',
   },
   sectionTitle: {
     flex: 1,
@@ -428,31 +820,49 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FB8C00',
   },
+  finalConfirmBoxActive: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#4CAF50',
+  },
   finalConfirmTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#E65100',
     marginBottom: 8,
   },
   finalConfirmText: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#5D4037',
-    lineHeight: 20,
+    lineHeight: 21,
     marginBottom: 12,
   },
-  continueBtn: {
-    marginTop: 24,
-    backgroundColor: '#C62828',
+  finalWarningText: {
+    fontSize: 13,
+    color: '#B71C1C',
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  confirmDecisionBtn: {
+    marginTop: 10,
+    backgroundColor: '#2E7D32',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
   },
-  continueBtnDisabled: {
+  refuseDecisionBtn: {
+    marginTop: 12,
+    backgroundColor: '#B71C1C',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  decisionBtnDisabled: {
     backgroundColor: '#BDBDBD',
   },
-  continueBtnText: {
+  decisionBtnText: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: 16,
+    fontSize: 15,
+    textAlign: 'center',
   },
 });

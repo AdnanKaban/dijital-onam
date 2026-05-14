@@ -2,17 +2,17 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert,
-  Animated,
-  Easing,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Animated,
+    Easing,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 import { useSesliAsistan } from '../hooks/useSesliAsistan';
 
@@ -221,7 +221,7 @@ export default function HastaBilgileriScreen() {
     const ad = isimParcalari.slice(0, -1).join(' ') || isimParcalari[0];
     const soyad = isimParcalari.length > 1 ? isimParcalari[isimParcalari.length - 1] : '';
     router.push({
-      pathname: '/bilgilendirme',
+      pathname: '/bilgilendirme-secim',
       params: {
         lang: params.lang ?? 'tr', ad, soyad,
         adSoyad: form.adSoyad, tcKimlik: form.tcKimlik, protokolNo: form.tcKimlik,
